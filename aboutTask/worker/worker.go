@@ -23,8 +23,12 @@ func runWorker() {
 	fmt.Println("request a task")
 	call("Master.DistributeTask", &args, &reply)
 	task := reply.T
+	if reply.T.Id == -1 {
+		fmt.Println("get no task")
+		return
+	}
 	rand.Seed(time.Now().UnixNano())
-	taskNeedTime := rand.Intn(10)
+	taskNeedTime := rand.Intn(20)
 	time.Sleep(time.Duration(taskNeedTime) * time.Second)
 	fmt.Printf("finish a task %d\n", task.Id)
 
@@ -58,6 +62,9 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 func main() {
 	//runWorker()
 	for i := 0; i < 10; i++ {
+		rand.Seed(time.Now().UnixNano())
+		waitTime := rand.Intn(400)
+		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 		go runWorker()
 	}
 
