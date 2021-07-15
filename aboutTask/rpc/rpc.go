@@ -14,6 +14,18 @@ import "strconv"
 // and reply for an RPC.
 //
 
+// 定义通信中的变量
+var (
+	NOTASK int = -1
+
+	GENERATED   int = 0
+	DISTRIBUTED int = 1
+	FINISHED    int = 2
+
+	MAPTASK    = 12
+	REDUCETASK = 13
+)
+
 type NoArgs struct {
 }
 
@@ -21,7 +33,8 @@ type NoReply struct {
 }
 
 type Task struct {
-	Id int
+	Id       int
+	TaskKind int
 }
 
 type TaskArgs struct {
@@ -32,7 +45,8 @@ type TaskReply struct {
 }
 
 type FinishTaskArgs struct {
-	Id int
+	Id       int
+	TaskKind int
 }
 
 type FinishTaskReply struct {

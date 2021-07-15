@@ -23,19 +23,35 @@ func runWorker() {
 	fmt.Println("request a task")
 	call("Master.DistributeTask", &args, &reply)
 	task := reply.T
-	if reply.T.Id == -1 {
+	if reply.T.Id == NOTASK || (reply.T.TaskKind != MAPTASK && reply.T.TaskKind != REDUCETASK) {
 		fmt.Println("get no task")
 		return
 	}
-	rand.Seed(time.Now().UnixNano())
-	taskNeedTime := rand.Intn(20)
-	time.Sleep(time.Duration(taskNeedTime) * time.Second)
-	fmt.Printf("finish a task %d\n", task.Id)
 
-	// 告诉master完成
-	finishTaskArgs := FinishTaskArgs{Id: task.Id}
-	finishTaskReply := FinishTaskReply{}
-	call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
+	taskMaxTime := 2
+	if reply.T.TaskKind == MAPTASK {
+		fmt.Println("get map task")
+		rand.Seed(time.Now().UnixNano())
+		taskNeedTime := rand.Intn(taskMaxTime)
+		time.Sleep(time.Duration(taskNeedTime) * time.Second)
+		fmt.Printf("finish a map task %d\n", task.Id)
+
+		// 告诉master完成
+		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK}
+		finishTaskReply := FinishTaskReply{}
+		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
+	} else if reply.T.TaskKind == REDUCETASK {
+		fmt.Println("get reduce task")
+		rand.Seed(time.Now().UnixNano())
+		taskNeedTime := rand.Intn(taskMaxTime)
+		time.Sleep(time.Duration(taskNeedTime) * time.Second)
+		fmt.Printf("finish a reduce task %d\n", task.Id)
+
+		// 告诉master完成
+		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: REDUCETASK}
+		finishTaskReply := FinishTaskReply{}
+		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
+	}
 }
 
 // send an RPC request to the master, wait for the response.
@@ -60,12 +76,18 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 }
 
 func main() {
-	//runWorker()
-	for i := 0; i < 10; i++ {
-		rand.Seed(time.Now().UnixNano())
-		waitTime := rand.Intn(400)
-		time.Sleep(time.Duration(waitTime) * time.Millisecond)
-		go runWorker()
+	workers := 3
+	epoch := 10
+
+	for i := 0; i < epoch; i++ {
+		//runWorker()
+		for i := 0; i < workers; i++ {
+			rand.Seed(time.Now().UnixNano())
+			waitTime := rand.Intn(400)
+			time.Sleep(time.Duration(waitTime) * time.Millisecond)
+			go runWorker()
+		}
+		time.Sleep(5 * time.Second)
 	}
 
 	args := NoArgs{}
