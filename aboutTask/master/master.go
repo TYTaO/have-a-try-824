@@ -13,40 +13,35 @@ import (
 	. "have-try-6.824/aboutTask/rpc"
 )
 
-type task struct {
-	id    int
-	state int // 0: generated   1: distributed   2: finished
-	kind  int // map or reduce
-}
-
 type Master struct {
 	// Your definitions here.
 	nReduce int
 	nMap    int
 	mtx     sync.Mutex
 
-	mapTasks    []task
-	reduceTasks []task
+	mapTasks    []Task
+	reduceTasks []Task
 }
 
 func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error {
 	m.mtx.Lock()
 	if args.TaskKind == MAPTASK {
-		if m.mapTasks[args.Id].state == DISTRIBUTED {
-			m.mapTasks[args.Id].state = FINISHED
+		if m.mapTasks[args.Id].State == DISTRIBUTED {
+			m.mapTasks[args.Id].State = FINISHED
 			fmt.Printf("map task is finished task id: %d\n", args.Id)
 			mapFinishedChans[args.Id] <- true
 			m.nMap--
 			// generate reduce task
 			atomic.AddInt32(&redTaskCounter, 1)
-			m.reduceTasks = append(m.reduceTasks, task{id: int(redTaskCounter), state: GENERATED, kind: REDUCETASK})
+			m.reduceTasks = append(m.reduceTasks, Task{Id: int(redTaskCounter),
+				State: GENERATED, TaskKind: REDUCETASK, TaskFile: args.TaskFile})
 			m.nReduce++
 		} else {
 			fmt.Printf("map task is canceled task id: %d\n", args.Id)
 		}
 	} else if args.TaskKind == REDUCETASK {
-		if m.reduceTasks[args.Id].state == DISTRIBUTED {
-			m.reduceTasks[args.Id].state = FINISHED
+		if m.reduceTasks[args.Id].State == DISTRIBUTED {
+			m.reduceTasks[args.Id].State = FINISHED
 			fmt.Printf("reduce task is finished task id: %d\n", args.Id)
 			redFinishedChans[args.Id] <- true
 			m.nReduce--
@@ -66,7 +61,7 @@ func waitTaskFinished(taskId int, taskKind int) {
 		// 设计一个超时
 		case <-time.After(20 * time.Second):
 			m.mtx.Lock()
-			m.mapTasks[taskId].state = GENERATED
+			m.mapTasks[taskId].State = GENERATED
 			fmt.Printf("map task is timeout task id: %d\n", taskId)
 			m.mtx.Unlock()
 		case <-mapFinishedChans[taskId]: // task finished
@@ -77,7 +72,7 @@ func waitTaskFinished(taskId int, taskKind int) {
 		// 设计一个超时
 		case <-time.After(10 * time.Second):
 			m.mtx.Lock()
-			m.reduceTasks[taskId].state = GENERATED
+			m.reduceTasks[taskId].State = GENERATED
 			fmt.Printf("reduce task is timeout task id: %d\n", taskId)
 			m.mtx.Unlock()
 		case <-redFinishedChans[taskId]: // task finished
@@ -98,12 +93,12 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 	// 分发任务
 	// reduce 任务
 	for i, _ := range m.reduceTasks {
-		if m.reduceTasks[i].state == GENERATED {
-			fmt.Printf("Distribute a reduce task %d\n", m.reduceTasks[i].id)
-			reply.T = Task{Id: m.reduceTasks[i].id, TaskKind: REDUCETASK}
+		if m.reduceTasks[i].State == GENERATED {
+			fmt.Printf("Distribute a reduce task %d\n", m.reduceTasks[i].Id)
+			reply.T = m.reduceTasks[i]
 			hasDistribute = true
-			m.reduceTasks[i].state = DISTRIBUTED
-			go waitTaskFinished(m.reduceTasks[i].id, REDUCETASK)
+			m.reduceTasks[i].State = DISTRIBUTED
+			go waitTaskFinished(m.reduceTasks[i].Id, REDUCETASK)
 			break
 		}
 	}
@@ -112,12 +107,12 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 	}
 	// map 任务
 	for i, _ := range m.mapTasks {
-		if m.mapTasks[i].state == GENERATED {
-			fmt.Printf("Distribute a map task %d\n", m.mapTasks[i].id)
-			reply.T = Task{Id: m.mapTasks[i].id, TaskKind: MAPTASK}
+		if m.mapTasks[i].State == GENERATED {
+			fmt.Printf("Distribute a map task %d\n", m.mapTasks[i].Id)
+			reply.T = m.mapTasks[i]
 			hasDistribute = true
-			m.mapTasks[i].state = DISTRIBUTED
-			go waitTaskFinished(m.mapTasks[i].id, MAPTASK)
+			m.mapTasks[i].State = DISTRIBUTED
+			go waitTaskFinished(m.mapTasks[i].Id, MAPTASK)
 			break
 		}
 	}
@@ -165,11 +160,11 @@ func MakeMaster(nReduce int) *Master {
 	m.nMap = nReduce
 	// Your code here.
 	// init task
-	m.mapTasks = make([]task, 0)
-	m.reduceTasks = make([]task, 0)
+	m.mapTasks = make([]Task, 0)
+	m.reduceTasks = make([]Task, 0)
 	initMapTaskNum := nReduce
 	for i := 0; i < initMapTaskNum; i++ {
-		m.mapTasks = append(m.mapTasks, task{id: i, state: GENERATED, kind: MAPTASK})
+		m.mapTasks = append(m.mapTasks, Task{Id: i, State: GENERATED, TaskKind: MAPTASK})
 	}
 
 	m.server()

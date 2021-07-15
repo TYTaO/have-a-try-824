@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/rpc"
+	"os"
+	"strconv"
 	"time"
 
 	. "have-try-6.824/aboutTask/rpc"
@@ -34,10 +37,19 @@ func runWorker() {
 		rand.Seed(time.Now().UnixNano())
 		taskNeedTime := rand.Intn(taskMaxTime)
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
+
+		// maptask: 写一个文件，填入一个map
+		filename := "mr-map-out-" + strconv.Itoa(reply.T.Id)
+		file, err := os.Create(filename)
+		defer file.Close()
+		if err != nil {
+			log.Fatalf("cannot create %v", filename)
+		}
+		fmt.Fprintf(file, "%v\n", "map")
 		fmt.Printf("finish a map task %d\n", task.Id)
 
 		// 告诉master完成
-		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK}
+		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK, TaskFile: filename}
 		finishTaskReply := FinishTaskReply{}
 		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
 	} else if reply.T.TaskKind == REDUCETASK {
@@ -45,6 +57,29 @@ func runWorker() {
 		rand.Seed(time.Now().UnixNano())
 		taskNeedTime := rand.Intn(taskMaxTime)
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
+
+		// reducetask: 接着写一个文件，填入一个reduce
+		// 读 map 中间 文件
+		taskFileName := reply.T.TaskFile
+		file, err := os.Open(taskFileName)
+		defer file.Close()
+		if err != nil {
+			log.Fatalf("cannot open %v", taskFileName)
+		}
+		content, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v", file)
+		}
+		reduceContent := string(content) + "reduce\n"
+		// 写 reduce 文件
+		filename := "mr-reduce-out-" + strconv.Itoa(reply.T.Id)
+		reduceFile, err := os.Create(filename)
+		defer reduceFile.Close()
+		if err != nil {
+			log.Fatalf("cannot create %v", filename)
+		}
+		fmt.Fprintf(reduceFile, "%v\n", reduceContent)
+
 		fmt.Printf("finish a reduce task %d\n", task.Id)
 
 		// 告诉master完成
