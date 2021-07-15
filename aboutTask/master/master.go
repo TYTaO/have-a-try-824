@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -13,34 +12,46 @@ import (
 	. "have-try-6.824/aboutTask/rpc"
 )
 
+var (
+	GENERATED   int = 0
+	DISTRIBUTED int = 1
+	FINISHED    int = 2
+)
+
 type task struct {
-	id int
+	id    int
+	state int // 0: generated   1: distributed   2: finished
 }
 
 type Master struct {
 	// Your definitions here.
-	remainTaskNum int
-	mtx           sync.Mutex
+	nReduce int
+	mtx     sync.Mutex
+
+	tasks []task
 }
 
 func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error {
 	m.mtx.Lock()
-	m.remainTaskNum--
+	m.tasks[args.Id].state = FINISHED
 	fmt.Printf("task is finished task id: %d\n", args.Id)
+	m.nReduce--
 	m.mtx.Unlock()
 
 	return nil
 }
 
 func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
 	// 分发任务
-	randIntn := rand.Intn(10)
-	if randIntn%2 == 0 {
-		fmt.Printf("Distribute a task %d\n", 0)
-		reply.T = Task{Id: 0}
-	} else {
-		fmt.Printf("Distribute a task %d\n", 1)
-		reply.T = Task{Id: 1}
+	for i, _ := range m.tasks {
+		if m.tasks[i].state == GENERATED {
+			fmt.Printf("Distribute a task %d\n", m.tasks[i].id)
+			reply.T = Task{Id: m.tasks[i].id}
+			m.tasks[i].state = DISTRIBUTED
+			break
+		}
 	}
 	return nil
 }
@@ -63,10 +74,10 @@ func (m *Master) server() {
 //
 func (m *Master) Done() bool {
 	ret := false
-
+	fmt.Println(m.tasks)
 	// Your code here.
 	// all tasks have finished
-	if m.remainTaskNum <= 0 {
+	if m.nReduce <= 0 {
 		ret = true
 	}
 	return ret
@@ -78,8 +89,14 @@ func (m *Master) Done() bool {
 //
 func MakeMaster(nReduce int) *Master {
 	m := Master{}
-	m.remainTaskNum = nReduce
+	m.nReduce = nReduce
 	// Your code here.
+	// init task
+	m.tasks = make([]task, 0)
+	initTaskNum := nReduce
+	for i := 0; i < initTaskNum; i++ {
+		m.tasks = append(m.tasks, task{id: i, state: GENERATED})
+	}
 
 	m.server()
 	return &m
@@ -89,7 +106,7 @@ func MakeMaster(nReduce int) *Master {
 func main() {
 	m := MakeMaster(10)
 	for m.Done() == false {
-		time.Sleep(time.Second)
+		time.Sleep(2 * time.Second)
 	}
 	time.Sleep(time.Second)
 }
