@@ -14,12 +14,10 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+type NoArgs struct {
 }
 
-type ExampleReply struct {
-	Y int
+type NoReply struct {
 }
 
 type Task struct {

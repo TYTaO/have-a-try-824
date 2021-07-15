@@ -41,6 +41,11 @@ func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error
 	return nil
 }
 
+// 给worker一个活着的信号，在worker需要关闭时起作用
+func (m *Master) IsAlive(args *NoArgs, reply *NoReply) error {
+	return nil
+}
+
 func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
