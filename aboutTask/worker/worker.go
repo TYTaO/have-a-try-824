@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/rpc"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -39,17 +41,11 @@ func runWorker() {
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
 
 		// maptask: 写一个文件，填入一个map
-		filename := "mr-map-out-" + strconv.Itoa(reply.T.Id)
-		file, err := os.Create(filename)
-		defer file.Close()
-		if err != nil {
-			log.Fatalf("cannot create %v", filename)
-		}
-		fmt.Fprintf(file, "%v\n", "map")
+		outFileName := mapWork(task.Id, task.TaskFile)
 		fmt.Printf("finish a map task %d\n", task.Id)
 
 		// 告诉master完成
-		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK, TaskFile: filename}
+		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK, TaskFile: outFileName}
 		finishTaskReply := FinishTaskReply{}
 		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
 	} else if reply.T.TaskKind == REDUCETASK {
@@ -59,26 +55,7 @@ func runWorker() {
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
 
 		// reducetask: 接着写一个文件，填入一个reduce
-		// 读 map 中间 文件
-		taskFileName := reply.T.TaskFile
-		file, err := os.Open(taskFileName)
-		defer file.Close()
-		if err != nil {
-			log.Fatalf("cannot open %v", taskFileName)
-		}
-		content, err := ioutil.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v", file)
-		}
-		reduceContent := string(content) + "reduce\n"
-		// 写 reduce 文件
-		filename := "mr-reduce-out-" + strconv.Itoa(reply.T.Id)
-		reduceFile, err := os.Create(filename)
-		defer reduceFile.Close()
-		if err != nil {
-			log.Fatalf("cannot create %v", filename)
-		}
-		fmt.Fprintf(reduceFile, "%v\n", reduceContent)
+		reduceWork(reply.T.Id, reply.T.TaskFile)
 
 		fmt.Printf("finish a reduce task %d\n", task.Id)
 
@@ -86,6 +63,82 @@ func runWorker() {
 		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: REDUCETASK}
 		finishTaskReply := FinishTaskReply{}
 		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
+	}
+}
+
+func mapWork(mapTaskId int, filename string) string {
+	intermediate := []KeyValue{}
+	file, err := os.Open(filename)
+	defer file.Close()
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	kva := Map(string(content))
+	intermediate = append(intermediate, kva...)
+
+	// 写下map-out
+	outFilename := "mr-map-out-" + strconv.Itoa(mapTaskId)
+	outFile, err := os.Create(outFilename)
+	defer outFile.Close()
+	if err != nil {
+		log.Fatalf("cannot create %v", outFilename)
+	}
+	enc := json.NewEncoder(outFile)
+	for _, kv := range intermediate {
+		err := enc.Encode(&kv)
+		if err != nil {
+			log.Fatalf("cannot encode %v", kv)
+		}
+	}
+
+	return outFilename
+}
+
+func reduceWork(reduceTaskId int, filename string) {
+	// 读 map 中间 文件
+	// read from map out file
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	dec := json.NewDecoder(file)
+	intermediate := []KeyValue{}
+	for {
+		var kv KeyValue
+		if err := dec.Decode(&kv); err != nil {
+			break
+		}
+		intermediate = append(intermediate, kv)
+	}
+	// reduce
+	sort.Sort(ByKey(intermediate))
+
+	reduceOutName := "mr-reduce-out-" + strconv.Itoa(reduceTaskId)
+	ofile, _ := os.Create(reduceOutName)
+	defer ofile.Close()
+	// call Reduce on each distinct key in intermediate[],
+	// and print the result to mr-out-0.
+	//
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := Reduce(values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
 	}
 }
 

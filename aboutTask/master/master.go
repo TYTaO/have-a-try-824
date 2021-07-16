@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -155,7 +156,7 @@ func (m *Master) Done() bool {
 // main/mrmaster.go calls this function.
 // nReduce is the number of reduce tasks to use.
 //
-func MakeMaster(nReduce int) *Master {
+func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
 	m.nMap = nReduce
 	// Your code here.
@@ -164,7 +165,7 @@ func MakeMaster(nReduce int) *Master {
 	m.reduceTasks = make([]Task, 0)
 	initMapTaskNum := nReduce
 	for i := 0; i < initMapTaskNum; i++ {
-		m.mapTasks = append(m.mapTasks, Task{Id: i, State: GENERATED, TaskKind: MAPTASK})
+		m.mapTasks = append(m.mapTasks, Task{Id: i, State: GENERATED, TaskKind: MAPTASK, TaskFile: files[i]})
 	}
 
 	m.server()
@@ -178,8 +179,14 @@ var redTaskCounter int32
 
 // 通过rpc 给worker发任务
 func main() {
-	tasks := 3
-	m = MakeMaster(tasks)
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: mrmaster inputfiles...\n")
+		os.Exit(1)
+	}
+	tasks := len(os.Args[1:])
+	fmt.Printf("mapreduce files: %v\n", os.Args[1:])
+	// need args to indicate the file to word count
+	m = MakeMaster(os.Args[1:], tasks)
 	redTaskCounter = -1
 	mapFinishedChans = make([]chan bool, 0)
 	for i := 0; i < tasks; i++ {
