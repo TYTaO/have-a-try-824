@@ -79,7 +79,7 @@ func waitTaskFinished(taskId int, taskKind int) {
 	if taskKind == MAPTASK {
 		select {
 		// 设计一个超时
-		case <-time.After(20 * time.Second):
+		case <-time.After(10 * time.Second):
 			m.mtx.Lock()
 			m.mapTasks[taskId].State = GENERATED
 			fmt.Printf("map task is timeout task id: %d\n", taskId)
@@ -109,7 +109,6 @@ func (m *Master) IsAlive(args *NoArgs, reply *NoReply) error {
 func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 	hasDistribute := false
 	m.mtx.Lock()
-	defer m.mtx.Unlock()
 	// 分发任务
 	// map 任务
 	for i, _ := range m.mapTasks {
@@ -122,7 +121,8 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 			break
 		}
 	}
-
+	m.mtx.Unlock()
+	// wait map task 过程就别占着锁了！！！
 	if hasDistribute {
 		return nil
 	}
@@ -134,6 +134,7 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 		fmt.Println("wait map tasks finished")
 		time.Sleep(time.Second)
 	}
+	m.mtx.Lock()
 	// generate reduce tasks
 	if !m.hasGenerateReduceTasks {
 		if !m.hasGenerateReduceTasks {
@@ -163,6 +164,7 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 		// 必须显式说明，不然默认为0了
 		reply.T = Task{Id: NOTASK}
 	}
+	m.mtx.Unlock()
 	return nil
 }
 
