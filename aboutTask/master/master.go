@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net"
 	"net/http"
@@ -16,12 +17,15 @@ import (
 
 type Master struct {
 	// Your definitions here.
-	nReduce int
-	nMap    int
-	mtx     sync.Mutex
+	ReduceOutNum int // do not confuse nReduce to ReduceOutNum
+	nReduce      int
+	nMap         int
+	mtx          sync.Mutex
 
-	mapTasks    []Task
-	reduceTasks []Task
+	mapTasks               []Task
+	reduceTasks            []Task
+	reduceTaskFileLists    [][]string
+	hasGenerateReduceTasks bool
 }
 
 func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error {
@@ -32,11 +36,13 @@ func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error
 			fmt.Printf("map task is finished task id: %d\n", args.Id)
 			mapFinishedChans[args.Id] <- true
 			m.nMap--
-			// generate reduce task
-			atomic.AddInt32(&redTaskCounter, 1)
-			m.reduceTasks = append(m.reduceTasks, Task{Id: int(redTaskCounter),
-				State: GENERATED, TaskKind: REDUCETASK, TaskFile: args.TaskFile})
-			m.nReduce++
+			// generate ReduceOutNum 个 ReduceTaskFiles of reduce task
+			for i, _ := range args.TaskFiles {
+				if len(args.TaskFiles) != m.ReduceOutNum {
+					log.Fatalln("len(args.TaskFiles) != m.ReduceOutNum")
+				}
+				m.reduceTaskFileLists[i] = append(m.reduceTaskFileLists[i], args.TaskFiles[i])
+			}
 		} else {
 			fmt.Printf("map task is canceled task id: %d\n", args.Id)
 		}
@@ -52,6 +58,19 @@ func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error
 	}
 	m.mtx.Unlock()
 
+	return nil
+}
+
+func (m *Master) GetReduceOutNum(args *NoArgs, reply *NumReply) error {
+	reply.Num = m.ReduceOutNum
+
+	return nil
+}
+
+// WaitMapTaskFinished
+// reduces can't start until the last map has finished.
+func (m *Master) WaitMapTaskFinished(args *NoArgs, reply *WaitMapReply) error {
+	reply.IsFinished = m.nMap <= 0
 	return nil
 }
 
@@ -92,20 +111,6 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	// 分发任务
-	// reduce 任务
-	for i, _ := range m.reduceTasks {
-		if m.reduceTasks[i].State == GENERATED {
-			fmt.Printf("Distribute a reduce task %d\n", m.reduceTasks[i].Id)
-			reply.T = m.reduceTasks[i]
-			hasDistribute = true
-			m.reduceTasks[i].State = DISTRIBUTED
-			go waitTaskFinished(m.reduceTasks[i].Id, REDUCETASK)
-			break
-		}
-	}
-	if hasDistribute {
-		return nil
-	}
 	// map 任务
 	for i, _ := range m.mapTasks {
 		if m.mapTasks[i].State == GENERATED {
@@ -114,6 +119,43 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 			hasDistribute = true
 			m.mapTasks[i].State = DISTRIBUTED
 			go waitTaskFinished(m.mapTasks[i].Id, MAPTASK)
+			break
+		}
+	}
+
+	if hasDistribute {
+		return nil
+	}
+	// wait map task finished
+	for true {
+		if m.nMap <= 0 {
+			break
+		}
+		fmt.Println("wait map tasks finished")
+		time.Sleep(time.Second)
+	}
+	// generate reduce tasks
+	if !m.hasGenerateReduceTasks {
+		if !m.hasGenerateReduceTasks {
+			for i, _ := range m.reduceTaskFileLists {
+				// generate reduce task
+				atomic.AddInt32(&redTaskCounter, 1)
+				m.reduceTasks = append(m.reduceTasks, Task{Id: int(redTaskCounter),
+					State: GENERATED, TaskKind: REDUCETASK, ReduceTaskFiles: m.reduceTaskFileLists[i]})
+				m.nReduce++
+			}
+			m.hasGenerateReduceTasks = true
+		}
+	}
+
+	// reduce 任务
+	for i, _ := range m.reduceTasks {
+		if m.reduceTasks[i].State == GENERATED {
+			fmt.Printf("Distribute a reduce task %d\n", m.reduceTasks[i].Id)
+			reply.T = m.reduceTasks[i]
+			hasDistribute = true
+			m.reduceTasks[i].State = DISTRIBUTED
+			go waitTaskFinished(m.reduceTasks[i].Id, REDUCETASK)
 			break
 		}
 	}
@@ -144,10 +186,12 @@ func (m *Master) Done() bool {
 	ret := false
 	fmt.Printf("MapTasks: %v\n", m.mapTasks)
 	fmt.Printf("RedTasks: %v\n", m.reduceTasks)
+	fmt.Printf("nReduce: %d, nMap: %d\n", m.nReduce, m.nMap)
 	// Your code here.
 	// all tasks have finished
-	if m.nReduce <= 0 && m.nMap <= 0 {
+	if m.hasGenerateReduceTasks && m.nReduce <= 0 && m.nMap <= 0 {
 		ret = true
+		fmt.Println("The job has finished!")
 	}
 	return ret
 }
@@ -158,24 +202,38 @@ func (m *Master) Done() bool {
 //
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
-	m.nMap = nReduce
+	m.nMap = len(files)
+	m.ReduceOutNum = nReduce
+	m.nReduce = 0
 	// Your code here.
 	// init task
 	m.mapTasks = make([]Task, 0)
 	m.reduceTasks = make([]Task, 0)
-	initMapTaskNum := nReduce
+	m.reduceTaskFileLists = make([][]string, m.ReduceOutNum)
+	m.hasGenerateReduceTasks = false
+	initMapTaskNum := len(files)
 	for i := 0; i < initMapTaskNum; i++ {
-		m.mapTasks = append(m.mapTasks, Task{Id: i, State: GENERATED, TaskKind: MAPTASK, TaskFile: files[i]})
+		m.mapTasks = append(m.mapTasks, Task{Id: i, State: GENERATED, TaskKind: MAPTASK, MapTaskFile: files[i]})
 	}
 
 	m.server()
 	return &m
 }
 
+// use ihash(key) % NReduce to choose the reduce
+// task number for each KeyValue emitted by Map.
+//
+func ihash(key string) int {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return int(h.Sum32() & 0x7fffffff)
+}
+
 var m *Master
 var mapFinishedChans []chan bool // 用来传输任务已完成
 var redFinishedChans []chan bool // 用来传输任务已完成
 var redTaskCounter int32
+var logger *log.Logger
 
 // 通过rpc 给worker发任务
 func main() {
@@ -186,16 +244,24 @@ func main() {
 	tasks := len(os.Args[1:])
 	fmt.Printf("mapreduce files: %v\n", os.Args[1:])
 	// need args to indicate the file to word count
-	m = MakeMaster(os.Args[1:], tasks)
+	ReduceOutNum := 10 // 6.824 里是nReduce
+	m = MakeMaster(os.Args[1:], ReduceOutNum)
 	redTaskCounter = -1
 	mapFinishedChans = make([]chan bool, 0)
 	for i := 0; i < tasks; i++ {
 		mapFinishedChans = append(mapFinishedChans, make(chan bool, 2))
 	}
-	redFinishedChans = make([]chan bool, 0)
-	for i := 0; i < tasks; i++ {
+	redFinishedChans = make([]chan bool, 0) // 之后每生产一个reduce task，加一个
+	for i := 0; i < m.ReduceOutNum; i++ {
 		redFinishedChans = append(redFinishedChans, make(chan bool, 2))
 	}
+	// log
+	file := "masterLog" + ".txt"
+	logFile, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0766)
+	if err != nil {
+		panic(err)
+	}
+	logger = log.New(logFile, "[master]", log.LstdFlags|log.Lshortfile|log.LUTC)
 
 	for m.Done() == false {
 		time.Sleep(2 * time.Second)

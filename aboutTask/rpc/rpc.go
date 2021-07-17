@@ -36,11 +36,17 @@ type NoArgs struct {
 type NoReply struct {
 }
 
+type NumReply struct {
+	Num int
+}
+
 type Task struct {
-	Id       int
-	State    int // 0: generated   1: distributed   2: finished
-	TaskKind int
-	TaskFile string
+	Id              int
+	State           int // 0: generated   1: distributed   2: finished
+	TaskKind        int
+	MapTaskFile     string   // reduce task 不需要这个  // todo 重构
+	ReduceOutId     int      // map task 不需要这个
+	ReduceTaskFiles []string // map task 不需要这个
 }
 
 type TaskArgs struct {
@@ -51,12 +57,16 @@ type TaskReply struct {
 }
 
 type FinishTaskArgs struct {
-	Id       int
-	TaskKind int
-	TaskFile string
+	Id        int
+	TaskKind  int
+	TaskFiles []string
 }
 
 type FinishTaskReply struct {
+}
+
+type WaitMapReply struct {
+	IsFinished bool
 }
 
 // Add your RPC definitions here.

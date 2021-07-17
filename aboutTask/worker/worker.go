@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -10,12 +11,20 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	. "have-try-6.824/aboutTask/rpc"
 )
 
+var ReduceOutNum int
+
 func runWorker() {
+	// get ReduceOutNum
+	numReply := NumReply{}
+	call("Master.GetReduceOutNum", &NoArgs{}, &numReply)
+	ReduceOutNum = numReply.Num
 	// declare an argument structure.
 	args := TaskArgs{}
 
@@ -41,11 +50,11 @@ func runWorker() {
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
 
 		// maptask: 写一个文件，填入一个map
-		outFileName := mapWork(task.Id, task.TaskFile)
+		outFileNames := mapWork(task.Id, task.MapTaskFile)
 		fmt.Printf("finish a map task %d\n", task.Id)
 
 		// 告诉master完成
-		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK, TaskFile: outFileName}
+		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK, TaskFiles: outFileNames}
 		finishTaskReply := FinishTaskReply{}
 		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
 	} else if reply.T.TaskKind == REDUCETASK {
@@ -53,9 +62,8 @@ func runWorker() {
 		rand.Seed(time.Now().UnixNano())
 		taskNeedTime := rand.Intn(taskMaxTime)
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
-
 		// reducetask: 接着写一个文件，填入一个reduce
-		reduceWork(reply.T.Id, reply.T.TaskFile)
+		reduceWork(reply.T.ReduceOutId, reply.T.ReduceTaskFiles)
 
 		fmt.Printf("finish a reduce task %d\n", task.Id)
 
@@ -66,8 +74,11 @@ func runWorker() {
 	}
 }
 
-func mapWork(mapTaskId int, filename string) string {
-	intermediate := []KeyValue{}
+func mapWork(mapTaskId int, filename string) []string {
+	intermediates := make([][]KeyValue, ReduceOutNum)
+	for i := range intermediates {
+		intermediates[i] = make([]KeyValue, 0)
+	}
 	file, err := os.Open(filename)
 	defer file.Close()
 	if err != nil {
@@ -77,49 +88,69 @@ func mapWork(mapTaskId int, filename string) string {
 	if err != nil {
 		log.Fatalf("cannot read %v", filename)
 	}
-	kva := Map(string(content))
-	intermediate = append(intermediate, kva...)
-
-	// 写下map-out
-	outFilename := "mr-map-out-" + strconv.Itoa(mapTaskId)
-	outFile, err := os.Create(outFilename)
-	defer outFile.Close()
-	if err != nil {
-		log.Fatalf("cannot create %v", outFilename)
+	// 分成ReduceOutNum（nReduce）个部分
+	// function to detect word separators.
+	ff := func(r rune) bool { return !unicode.IsLetter(r) }
+	// split contents into an array of words.
+	words := strings.FieldsFunc(string(content), ff)
+	intermediateContent := make([]string, ReduceOutNum)
+	for _, word := range words {
+		reduceId := ihash(word) % ReduceOutNum
+		intermediateContent[reduceId] = intermediateContent[reduceId] + word + " "
 	}
-	enc := json.NewEncoder(outFile)
-	for _, kv := range intermediate {
-		err := enc.Encode(&kv)
+
+	outFilenames := make([]string, ReduceOutNum)
+	for i, _ := range intermediateContent {
+		kva := Map(intermediateContent[i])
+		intermediates[i] = append(intermediates[i], kva...)
+		// 写下map-out
+		outFilenames[i] = "mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(i)
+		outFile, err := os.Create(outFilenames[i])
+		defer outFile.Close()
 		if err != nil {
-			log.Fatalf("cannot encode %v", kv)
+			log.Fatalf("cannot create %v", outFilenames[i])
+		}
+		enc := json.NewEncoder(outFile)
+		for _, kv := range intermediates[i] {
+			err := enc.Encode(&kv)
+			if err != nil {
+				log.Fatalf("cannot encode %v", kv)
+			}
 		}
 	}
 
-	return outFilename
+	return outFilenames
 }
 
-func reduceWork(reduceTaskId int, filename string) {
-	// 读 map 中间 文件
-	// read from map out file
-	file, err := os.Open(filename)
-	if err != nil {
-		log.Fatalf("cannot open %v", filename)
-	}
-	dec := json.NewDecoder(file)
+func reduceWork(reduceTaskId int, filenames []string) {
 	intermediate := []KeyValue{}
-	for {
-		var kv KeyValue
-		if err := dec.Decode(&kv); err != nil {
-			break
+
+	for _, filename := range filenames {
+		// 读 map 中间 文件
+		// read from map out file
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatalf("cannot open: %v", err)
 		}
-		intermediate = append(intermediate, kv)
+		dec := json.NewDecoder(file)
+
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			intermediate = append(intermediate, kv)
+		}
 	}
 	// reduce
 	sort.Sort(ByKey(intermediate))
 
-	reduceOutName := "mr-reduce-out-" + strconv.Itoa(reduceTaskId)
-	ofile, _ := os.Create(reduceOutName)
-	defer ofile.Close()
+	// use tempFile to ensure that nobody observes partially written files in the presence of crashes
+	tempFile, err := ioutil.TempFile("./", "reduce-tmp-*")
+	if err != nil {
+		log.Fatalf("cannot create TempFile")
+	}
+
 	// call Reduce on each distinct key in intermediate[],
 	// and print the result to mr-out-0.
 	//
@@ -136,9 +167,17 @@ func reduceWork(reduceTaskId int, filename string) {
 		output := Reduce(values)
 
 		// this is the correct format for each line of Reduce output.
-		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
 
 		i = j
+	}
+	// On Windows we can't opera on tmp without closing it.
+	tempFile.Close()
+	reduceOutName := "mr-out-" + strconv.Itoa(reduceTaskId)
+	err = os.Rename(tempFile.Name(), reduceOutName)
+	if err != nil {
+		fmt.Println(err)
+		log.Fatalf("cannot Rename %v", tempFile.Name())
 	}
 }
 
@@ -161,6 +200,15 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+// use ihash(key) % NReduce to choose the reduce
+// task number for each KeyValue emitted by Map.
+//
+func ihash(key string) int {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return int(h.Sum32() & 0x7fffffff)
 }
 
 func main() {
