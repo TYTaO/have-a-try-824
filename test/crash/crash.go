@@ -2,7 +2,7 @@ package crash
 
 import (
 	crand "crypto/rand"
-	myRpc "have-try-6.824/aboutTask/rpc"
+	myRpc "have-try-6.824/rpc"
 	"math/big"
 	"os"
 	"sort"

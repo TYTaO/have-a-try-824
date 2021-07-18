@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	. "have-try-6.824/aboutTask/rpc"
+	. "have-try-6.824/rpc"
 )
 
 type Master struct {
