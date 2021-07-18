@@ -142,7 +142,7 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 				// generate reduce task
 				atomic.AddInt32(&redTaskCounter, 1)
 				m.reduceTasks = append(m.reduceTasks, Task{Id: int(redTaskCounter),
-					State: GENERATED, TaskKind: REDUCETASK, ReduceTaskFiles: m.reduceTaskFileLists[i]})
+					State: GENERATED, TaskKind: REDUCETASK, ReduceOutId: i, ReduceTaskFiles: m.reduceTaskFileLists[i]})
 				m.nReduce++
 			}
 			m.hasGenerateReduceTasks = true
