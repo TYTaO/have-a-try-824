@@ -18,24 +18,29 @@ import (
 type Master struct {
 	// Your definitions here.
 	ReduceOutNum int // do not confuse nReduce to ReduceOutNum
-	nReduce      int
-	nMap         int
+	nReduce      int // count reduce tasks
+	nMap         int // count map tasks
 	mtx          sync.Mutex
 
 	mapTasks               []Task
 	reduceTasks            []Task
 	reduceTaskFileLists    [][]string
 	hasGenerateReduceTasks bool
+	mapTasksMtx            sync.Mutex
+	redTasksMtx            sync.Mutex
 }
 
 func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error {
-	m.mtx.Lock()
 	if args.TaskKind == MAPTASK {
 		if m.mapTasks[args.Id].State == DISTRIBUTED {
+			m.mapTasksMtx.Lock()
 			m.mapTasks[args.Id].State = FINISHED
 			fmt.Printf("map task is finished task id: %d\n", args.Id)
 			mapFinishedChans[args.Id] <- true
 			m.nMap--
+			m.mapTasksMtx.Unlock()
+
+			m.redTasksMtx.Lock()
 			// generate ReduceOutNum 个 ReduceTaskFiles of reduce task
 			for i, _ := range args.TaskFiles {
 				if len(args.TaskFiles) != m.ReduceOutNum {
@@ -43,20 +48,22 @@ func (m *Master) FinishATask(args *FinishTaskArgs, reply *FinishTaskReply) error
 				}
 				m.reduceTaskFileLists[i] = append(m.reduceTaskFileLists[i], args.TaskFiles[i])
 			}
+			m.redTasksMtx.Unlock()
 		} else {
 			fmt.Printf("map task is canceled task id: %d\n", args.Id)
 		}
 	} else if args.TaskKind == REDUCETASK {
 		if m.reduceTasks[args.Id].State == DISTRIBUTED {
+			m.redTasksMtx.Lock()
 			m.reduceTasks[args.Id].State = FINISHED
 			fmt.Printf("reduce task is finished task id: %d\n", args.Id)
 			redFinishedChans[args.Id] <- true
 			m.nReduce--
+			m.redTasksMtx.Unlock()
 		} else {
 			fmt.Printf("reduce task is canceled task id: %d\n", args.Id)
 		}
 	}
-	m.mtx.Unlock()
 
 	return nil
 }
@@ -76,25 +83,26 @@ func (m *Master) WaitMapTaskFinished(args *NoArgs, reply *WaitMapReply) error {
 
 // go waitTaskFinished(id)
 func waitTaskFinished(taskId int, taskKind int) {
+	timeMax := 10
 	if taskKind == MAPTASK {
 		select {
 		// 设计一个超时
-		case <-time.After(10 * time.Second):
-			m.mtx.Lock()
+		case <-time.After(time.Duration(timeMax) * time.Second):
+			m.mapTasksMtx.Lock()
 			m.mapTasks[taskId].State = GENERATED
 			fmt.Printf("map task is timeout task id: %d\n", taskId)
-			m.mtx.Unlock()
+			m.mapTasksMtx.Unlock()
 		case <-mapFinishedChans[taskId]: // task finished
 			//
 		}
 	} else if taskKind == REDUCETASK {
 		select {
 		// 设计一个超时
-		case <-time.After(10 * time.Second):
-			m.mtx.Lock()
+		case <-time.After(time.Duration(timeMax) * time.Second):
+			m.redTasksMtx.Lock()
 			m.reduceTasks[taskId].State = GENERATED
 			fmt.Printf("reduce task is timeout task id: %d\n", taskId)
-			m.mtx.Unlock()
+			m.redTasksMtx.Unlock()
 		case <-redFinishedChans[taskId]: // task finished
 			//
 		}
@@ -108,7 +116,7 @@ func (m *Master) IsAlive(args *NoArgs, reply *NoReply) error {
 
 func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 	hasDistribute := false
-	m.mtx.Lock()
+	m.mapTasksMtx.Lock()
 	// 分发任务
 	// map 任务
 	for i, _ := range m.mapTasks {
@@ -121,7 +129,7 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 			break
 		}
 	}
-	m.mtx.Unlock()
+	m.mapTasksMtx.Unlock()
 	// wait map task 过程就别占着锁了！！！
 	if hasDistribute {
 		return nil
@@ -134,9 +142,10 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 		fmt.Println("wait map tasks finished")
 		time.Sleep(time.Second)
 	}
-	m.mtx.Lock()
+
 	// generate reduce tasks
 	if !m.hasGenerateReduceTasks {
+		m.redTasksMtx.Lock()
 		if !m.hasGenerateReduceTasks {
 			for i, _ := range m.reduceTaskFileLists {
 				// generate reduce task
@@ -147,8 +156,10 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 			}
 			m.hasGenerateReduceTasks = true
 		}
+		m.redTasksMtx.Unlock()
 	}
 
+	m.redTasksMtx.Lock()
 	// reduce 任务
 	for i, _ := range m.reduceTasks {
 		if m.reduceTasks[i].State == GENERATED {
@@ -160,11 +171,11 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 			break
 		}
 	}
+	m.redTasksMtx.Unlock()
 	if !hasDistribute {
 		// 必须显式说明，不然默认为0了
 		reply.T = Task{Id: NOTASK}
 	}
-	m.mtx.Unlock()
 	return nil
 }
 
