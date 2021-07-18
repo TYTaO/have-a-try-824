@@ -210,15 +210,13 @@ func main() {
 	workers := 3
 	epoch := 10
 
-	for i := 0; i < epoch; i++ {
-		//runWorker()
-		for i := 0; i < workers; i++ {
-			//rand.Seed(time.Now().UnixNano())
-			//waitTime := rand.Intn(400)
-			//time.Sleep(time.Duration(waitTime) * time.Millisecond)
-			runWorker()
-			time.Sleep(time.Second)
-		}
+	for i := 0; i < workers; i++ {
+		go func() {
+			//runWorker()
+			for i := 0; i < epoch; i++ {
+				runWorker()
+			}
+		}()
 	}
 
 	args := NoArgs{}

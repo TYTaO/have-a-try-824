@@ -135,12 +135,14 @@ func (m *Master) DistributeTask(args *TaskArgs, reply *TaskReply) error {
 		return nil
 	}
 	// wait map task finished
-	for true {
-		if m.nMap <= 0 {
-			break
-		}
+	if m.nMap > 0 {
 		fmt.Println("wait map tasks finished")
-		time.Sleep(time.Second)
+		time.Sleep(3 * time.Second)
+		if m.nMap > 0 { // 还是没有完成
+			// 先返回no task
+			reply.T = Task{Id: NOTASK}
+			return nil
+		}
 	}
 
 	// generate reduce tasks
