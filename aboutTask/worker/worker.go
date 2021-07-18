@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	. "have-try-6.824/aboutTask/rpc"
+	crash "have-try-6.824/aboutTask/test/crash"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -11,11 +13,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
-	"unicode"
-
-	. "have-try-6.824/aboutTask/rpc"
 )
 
 var ReduceOutNum int
@@ -44,21 +42,21 @@ func runWorker() {
 
 	taskMaxTime := 2
 	if reply.T.TaskKind == MAPTASK {
-		fmt.Println("get map task")
+		log.Println("get map task id: " + strconv.Itoa(reply.T.Id))
 		rand.Seed(time.Now().UnixNano())
 		taskNeedTime := rand.Intn(taskMaxTime)
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
 
 		// maptask: 写一个文件，填入一个map
 		outFileNames := mapWork(task.Id, task.MapTaskFile)
-		fmt.Printf("finish a map task %d\n", task.Id)
+		log.Printf("finish a map task %d\n", task.Id)
 
 		// 告诉master完成
 		finishTaskArgs := FinishTaskArgs{Id: task.Id, TaskKind: MAPTASK, TaskFiles: outFileNames}
 		finishTaskReply := FinishTaskReply{}
 		call("Master.FinishATask", &finishTaskArgs, &finishTaskReply)
 	} else if reply.T.TaskKind == REDUCETASK {
-		fmt.Println("get reduce task")
+		fmt.Println("get reduce task id: " + strconv.Itoa(reply.T.Id))
 		rand.Seed(time.Now().UnixNano())
 		taskNeedTime := rand.Intn(taskMaxTime)
 		time.Sleep(time.Duration(taskNeedTime) * time.Second)
@@ -75,6 +73,7 @@ func runWorker() {
 }
 
 func mapWork(mapTaskId int, filename string) []string {
+	log.Println("[check" + strconv.Itoa(mapTaskId) + "] start")
 	intermediates := make([][]KeyValue, ReduceOutNum)
 	for i := range intermediates {
 		intermediates[i] = make([]KeyValue, 0)
@@ -88,21 +87,16 @@ func mapWork(mapTaskId int, filename string) []string {
 	if err != nil {
 		log.Fatalf("cannot read %v", filename)
 	}
-	// 分成ReduceOutNum（nReduce）个部分
-	// function to detect word separators.
-	ff := func(r rune) bool { return !unicode.IsLetter(r) }
-	// split contents into an array of words.
-	words := strings.FieldsFunc(string(content), ff)
-	intermediateContent := make([]string, ReduceOutNum)
-	for _, word := range words {
-		reduceId := ihash(word) % ReduceOutNum
-		intermediateContent[reduceId] = intermediateContent[reduceId] + word + " "
-	}
 
+	kva := crash.Map(filename, string(content))
+
+	for _, kv := range kva {
+		reduceId := ihash(kv.Key) % ReduceOutNum
+		intermediates[reduceId] = append(intermediates[reduceId], kv)
+	}
 	outFilenames := make([]string, ReduceOutNum)
-	for i, _ := range intermediateContent {
-		kva := Map(intermediateContent[i])
-		intermediates[i] = append(intermediates[i], kva...)
+
+	for i := range outFilenames {
 		// 写下map-out
 		outFilenames[i] = "mr-" + strconv.Itoa(mapTaskId) + "-" + strconv.Itoa(i)
 		outFile, err := os.Create(outFilenames[i])
@@ -119,6 +113,7 @@ func mapWork(mapTaskId int, filename string) []string {
 		}
 	}
 
+	log.Println("[check" + strconv.Itoa(mapTaskId) + "] end")
 	return outFilenames
 }
 
@@ -164,7 +159,7 @@ func reduceWork(reduceTaskId int, filenames []string) {
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
 		}
-		output := Reduce(values)
+		output := crash.Reduce(intermediate[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.
 		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
@@ -218,12 +213,12 @@ func main() {
 	for i := 0; i < epoch; i++ {
 		//runWorker()
 		for i := 0; i < workers; i++ {
-			rand.Seed(time.Now().UnixNano())
-			waitTime := rand.Intn(400)
-			time.Sleep(time.Duration(waitTime) * time.Millisecond)
-			go runWorker()
+			//rand.Seed(time.Now().UnixNano())
+			//waitTime := rand.Intn(400)
+			//time.Sleep(time.Duration(waitTime) * time.Millisecond)
+			runWorker()
+			time.Sleep(time.Second)
 		}
-		time.Sleep(5 * time.Second)
 	}
 
 	args := NoArgs{}
